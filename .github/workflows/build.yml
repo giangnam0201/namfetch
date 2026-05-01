@@ -1,0 +1,251 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: devfetch
+  APP_VERSION: "1.0.0"
+
+jobs:
+  # --------------------------------------------------------------------- #
+  # Smoke test: just run it on every native runner                        #
+  # --------------------------------------------------------------------- #
+  run:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python devfetch.py
+
+  # --------------------------------------------------------------------- #
+  # Windows: .exe + .zip                                                   #
+  # --------------------------------------------------------------------- #
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pyinstaller
+      - run: pyinstaller --onefile --name ${{ env.APP_NAME }} devfetch.py
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/${{ env.APP_NAME }}.exe -DestinationPath dist/${{ env.APP_NAME }}-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-windows
+          path: |
+            dist/${{ env.APP_NAME }}.exe
+            dist/${{ env.APP_NAME }}-windows-x64.zip
+
+  # --------------------------------------------------------------------- #
+  # Linux: binary + .deb + .AppImage + .tar.gz                            #
+  # --------------------------------------------------------------------- #
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Build binary with PyInstaller
+        run: |
+          pip install pyinstaller
+          pyinstaller --onefile --name $APP_NAME devfetch.py
+
+      - name: Build .tar.gz
+        run: |
+          mkdir -p out
+          tar -C dist -czf out/${APP_NAME}-linux-x64.tar.gz $APP_NAME
+
+      - name: Build .deb (fpm)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ruby ruby-dev rubygems build-essential
+          sudo gem install --no-document fpm
+          mkdir -p pkg/usr/local/bin
+          cp dist/$APP_NAME pkg/usr/local/bin/$APP_NAME
+          chmod +x pkg/usr/local/bin/$APP_NAME
+          fpm -s dir -t deb \
+            -n $APP_NAME \
+            -v $APP_VERSION \
+            -C pkg \
+            --description "Cross-platform neofetch-like system info tool" \
+            --license MIT \
+            --maintainer "devfetch@example.com" \
+            --url "https://github.com/${{ github.repository }}" \
+            -p out/${APP_NAME}_${APP_VERSION}_amd64.deb \
+            usr
+
+      - name: Build .AppImage
+        run: |
+          sudo apt-get install -y --no-install-recommends imagemagick file
+          mkdir -p AppDir/usr/bin
+          cp dist/$APP_NAME AppDir/usr/bin/$APP_NAME
+          cat > AppDir/AppRun <<'EOF'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          exec "${HERE}/usr/bin/devfetch" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+          cat > AppDir/${APP_NAME}.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=devfetch
+          Exec=devfetch
+          Icon=${APP_NAME}
+          Categories=Utility;
+          Terminal=true
+          EOF
+          convert -size 256x256 xc:'#1e1e2e' \
+            -gravity center -pointsize 64 -fill '#89b4fa' \
+            -annotate 0 'df' AppDir/${APP_NAME}.png
+          curl -sSL -o appimagetool \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run \
+            AppDir out/${APP_NAME}-x86_64.AppImage || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-linux
+          path: |
+            dist/${{ env.APP_NAME }}
+            out/*
+
+  # --------------------------------------------------------------------- #
+  # macOS: binary + .pkg + .dmg                                            #
+  # --------------------------------------------------------------------- #
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Build binary with PyInstaller
+        run: |
+          pip install pyinstaller
+          pyinstaller --onefile --name $APP_NAME devfetch.py
+
+      - name: Build .pkg
+        run: |
+          mkdir -p out pkg-root/usr/local/bin
+          cp dist/$APP_NAME pkg-root/usr/local/bin/$APP_NAME
+          chmod +x pkg-root/usr/local/bin/$APP_NAME
+          pkgbuild --root pkg-root \
+            --identifier com.devfetch.cli \
+            --version $APP_VERSION \
+            --install-location / \
+            out/${APP_NAME}-${APP_VERSION}.pkg
+
+      - name: Build .dmg
+        run: |
+          mkdir -p dmg-root
+          cp dist/$APP_NAME dmg-root/$APP_NAME
+          hdiutil create -volname "$APP_NAME" \
+            -srcfolder dmg-root \
+            -ov -format UDZO \
+            out/${APP_NAME}-${APP_VERSION}.dmg
+
+      - name: Build .tar.gz
+        run: tar -C dist -czf out/${APP_NAME}-macos-universal.tar.gz $APP_NAME
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-macos
+          path: |
+            dist/${{ env.APP_NAME }}
+            out/*
+
+  # --------------------------------------------------------------------- #
+  # Android: .apk via Buildozer                                            #
+  # --------------------------------------------------------------------- #
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage devfetch into android/
+        run: cp devfetch.py android/devfetch.py
+
+      - name: Build APK
+        uses: ArtemSBulgakov/buildozer-action@v1
+        with:
+          command: buildozer android debug
+          workdir: android
+
+      - name: Rename APK
+        run: |
+          mkdir -p out
+          cp android/bin/*.apk out/${APP_NAME}-${APP_VERSION}-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-android
+          path: out/*.apk
+
+  # --------------------------------------------------------------------- #
+  # iOS: source bundle (an actual .ipa needs an Apple Developer cert)      #
+  # --------------------------------------------------------------------- #
+  ios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bundle source for a-Shell / Pythonista
+        run: |
+          mkdir -p out ios-bundle
+          cp devfetch.py ios-bundle/
+          cat > ios-bundle/README.txt <<'EOF'
+          devfetch on iOS
+          ===============
+          A signed .ipa cannot be produced in CI without an Apple Developer
+          account. To run devfetch on iOS:
+
+            1. Install a-Shell (free) or Pythonista from the App Store.
+            2. Copy devfetch.py into the app's storage.
+            3. Run:  python devfetch.py
+          EOF
+          (cd ios-bundle && zip -r ../out/${APP_NAME}-${APP_VERSION}-ios-source.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-ios
+          path: out/*.zip
+
+  # --------------------------------------------------------------------- #
+  # Release: on tag push, attach every artifact to a GitHub Release        #
+  # --------------------------------------------------------------------- #
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux, macos, android, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f \( \
+            -name "*.exe" -o -name "*.zip" -o -name "*.deb" -o \
+            -name "*.AppImage" -o -name "*.tar.gz" -o \
+            -name "*.pkg" -o -name "*.dmg" -o -name "*.apk" \
+          \) -exec cp {} release/ \;
+          ls -la release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
