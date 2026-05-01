@@ -11,12 +11,12 @@ permissions:
   contents: write
 
 env:
-  APP_NAME: devfetch
+  APP_NAME: namfetch
   APP_VERSION: "1.0.0"
 
 jobs:
   # --------------------------------------------------------------------- #
-  # Smoke test: just run it on every native runner                        #
+  # Smoke test                                                            #
   # --------------------------------------------------------------------- #
   run:
     strategy:
@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: python devfetch.py
+      - run: python namfetch.py
 
   # --------------------------------------------------------------------- #
   # Windows: .exe + .zip                                                   #
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install pyinstaller
-      - run: pyinstaller --onefile --name ${{ env.APP_NAME }} devfetch.py
+      - run: pyinstaller --onefile --name ${{ env.APP_NAME }} namfetch.py
       - name: Zip
         shell: pwsh
         run: Compress-Archive -Path dist/${{ env.APP_NAME }}.exe -DestinationPath dist/${{ env.APP_NAME }}-windows-x64.zip
@@ -64,7 +64,7 @@ jobs:
       - name: Build binary with PyInstaller
         run: |
           pip install pyinstaller
-          pyinstaller --onefile --name $APP_NAME devfetch.py
+          pyinstaller --onefile --name $APP_NAME namfetch.py
 
       - name: Build .tar.gz
         run: |
@@ -85,7 +85,7 @@ jobs:
             -C pkg \
             --description "Cross-platform neofetch-like system info tool" \
             --license MIT \
-            --maintainer "devfetch@example.com" \
+            --maintainer "namfetch@example.com" \
             --url "https://github.com/${{ github.repository }}" \
             -p out/${APP_NAME}_${APP_VERSION}_amd64.deb \
             usr
@@ -98,26 +98,25 @@ jobs:
           cat > AppDir/AppRun <<'EOF'
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "${0}")")"
-          exec "${HERE}/usr/bin/devfetch" "$@"
+          exec "${HERE}/usr/bin/namfetch" "$@"
           EOF
           chmod +x AppDir/AppRun
           cat > AppDir/${APP_NAME}.desktop <<EOF
           [Desktop Entry]
           Type=Application
-          Name=devfetch
-          Exec=devfetch
+          Name=namfetch
+          Exec=namfetch
           Icon=${APP_NAME}
           Categories=Utility;
           Terminal=true
           EOF
-          convert -size 256x256 xc:'#1e1e2e' \
-            -gravity center -pointsize 64 -fill '#89b4fa' \
-            -annotate 0 'df' AppDir/${APP_NAME}.png
+          # Solid-color icon — avoids ImageMagick font-policy crashes.
+          convert -size 256x256 xc:'#89b4fa' AppDir/${APP_NAME}.png
           curl -sSL -o appimagetool \
             https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run \
-            AppDir out/${APP_NAME}-x86_64.AppImage || true
+            AppDir out/${APP_NAME}-x86_64.AppImage
 
       - uses: actions/upload-artifact@v4
         with:
@@ -139,7 +138,7 @@ jobs:
       - name: Build binary with PyInstaller
         run: |
           pip install pyinstaller
-          pyinstaller --onefile --name $APP_NAME devfetch.py
+          pyinstaller --onefile --name $APP_NAME namfetch.py
 
       - name: Build .pkg
         run: |
@@ -147,7 +146,7 @@ jobs:
           cp dist/$APP_NAME pkg-root/usr/local/bin/$APP_NAME
           chmod +x pkg-root/usr/local/bin/$APP_NAME
           pkgbuild --root pkg-root \
-            --identifier com.devfetch.cli \
+            --identifier com.namfetch.cli \
             --version $APP_VERSION \
             --install-location / \
             out/${APP_NAME}-${APP_VERSION}.pkg
@@ -172,23 +171,49 @@ jobs:
             out/*
 
   # --------------------------------------------------------------------- #
-  # Android: .apk via Buildozer                                            #
+  # Android: .apk via Buildozer (manual install — no flaky Docker action)  #
   # --------------------------------------------------------------------- #
   android:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
-      - name: Stage devfetch into android/
-        run: cp devfetch.py android/devfetch.py
+      - name: Stage namfetch into android/
+        run: cp namfetch.py android/namfetch.py
+
+      - name: Install Buildozer system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git zip unzip openjdk-17-jdk-headless \
+            autoconf automake libtool pkg-config zlib1g-dev libffi-dev \
+            libssl-dev libsqlite3-dev libbz2-dev libreadline-dev \
+            libncurses-dev liblzma-dev cmake ccache
+
+      - name: Install Buildozer
+        run: pip install --upgrade buildozer "cython<3.0"
+
+      - name: Cache Buildozer global cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            android/.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('android/buildozer.spec') }}
+          restore-keys: buildozer-${{ runner.os }}-
 
       - name: Build APK
-        uses: ArtemSBulgakov/buildozer-action@v1
-        with:
-          command: buildozer android debug
-          workdir: android
+        working-directory: android
+        run: buildozer android debug
 
-      - name: Rename APK
+      - name: Collect APK
         run: |
           mkdir -p out
           cp android/bin/*.apk out/${APP_NAME}-${APP_VERSION}-android.apk
@@ -199,53 +224,126 @@ jobs:
           path: out/*.apk
 
   # --------------------------------------------------------------------- #
-  # iOS: source bundle (an actual .ipa needs an Apple Developer cert)      #
+  # iOS: real (unsigned) .ipa via kivy-ios                                 #
+  #      Install on device via AltStore / Sideloadly / Xcode personal team #
   # --------------------------------------------------------------------- #
   ios:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+    timeout-minutes: 120
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Bundle source for a-Shell / Pythonista
-        run: |
-          mkdir -p out ios-bundle
-          cp devfetch.py ios-bundle/
-          cat > ios-bundle/README.txt <<'EOF'
-          devfetch on iOS
-          ===============
-          A signed .ipa cannot be produced in CI without an Apple Developer
-          account. To run devfetch on iOS:
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
 
-            1. Install a-Shell (free) or Pythonista from the App Store.
-            2. Copy devfetch.py into the app's storage.
-            3. Run:  python devfetch.py
-          EOF
-          (cd ios-bundle && zip -r ../out/${APP_NAME}-${APP_VERSION}-ios-source.zip .)
+      - name: Install build deps
+        run: |
+          brew install autoconf automake libtool pkg-config
+          pip install --upgrade pip
+          pip install kivy-ios "cython<3.0"
+
+      - name: Cache kivy-ios toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/kivy-ios
+            dist
+          key: kivy-ios-${{ runner.os }}-${{ runner.arch }}-py311-v1
+
+      - name: Build Python + Kivy for iOS
+        run: |
+          toolchain build python3 kivy openssl libffi || \
+          toolchain build python3 kivy openssl libffi  # one retry
+
+      - name: Stage source for kivy-ios
+        run: |
+          mkdir -p ios-src
+          cp namfetch.py ios-src/
+          cp android/main.py ios-src/main.py
+
+      - name: Create Xcode project
+        run: |
+          toolchain create $APP_NAME ios-src
+
+      - name: Build unsigned .app
+        working-directory: ${{ env.APP_NAME }}-ios
+        run: |
+          xcodebuild \
+            -project ${APP_NAME}.xcodeproj \
+            -scheme ${APP_NAME} \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            PROVISIONING_PROFILE_SPECIFIER=
+
+      - name: Package unsigned .ipa
+        run: |
+          mkdir -p out Payload
+          APP_PATH="${APP_NAME}-ios/build/Build/Products/Release-iphoneos/${APP_NAME}.app"
+          cp -r "$APP_PATH" Payload/
+          zip -qr out/${APP_NAME}-${APP_VERSION}-ios-unsigned.ipa Payload
+          ls -la out/
+
       - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('out/*.ipa') != ''
         with:
           name: ${{ env.APP_NAME }}-ios
-          path: out/*.zip
+          path: out/*.ipa
 
   # --------------------------------------------------------------------- #
-  # Release: on tag push, attach every artifact to a GitHub Release        #
+  # Release: rolling "latest" on main pushes, versioned on tags            #
   # --------------------------------------------------------------------- #
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [windows, linux, macos, android, ios]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+
       - name: Flatten artifacts
         run: |
           mkdir -p release
           find artifacts -type f \( \
             -name "*.exe" -o -name "*.zip" -o -name "*.deb" -o \
             -name "*.AppImage" -o -name "*.tar.gz" -o \
-            -name "*.pkg" -o -name "*.dmg" -o -name "*.apk" \
+            -name "*.pkg" -o -name "*.dmg" -o -name "*.apk" -o \
+            -name "*.ipa" \
           \) -exec cp {} release/ \;
+          echo "--- artifacts to release ---"
           ls -la release/
+
+      - name: Compute release metadata
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "name=namfetch ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "name=Latest build (main)" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refresh rolling "latest" release
+        if: steps.meta.outputs.tag == 'latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --yes --cleanup-tag --repo ${{ github.repository }} || true
+
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
           files: release/*
           generate_release_notes: true
+          fail_on_unmatched_files: false

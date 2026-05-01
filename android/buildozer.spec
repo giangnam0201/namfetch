@@ -1,7 +1,7 @@
 [app]
-title = devfetch
-package.name = devfetch
-package.domain = org.devfetch
+title = namfetch
+package.name = namfetch
+package.domain = org.namfetch
 
 source.dir = .
 source.include_exts = py,png,ttf

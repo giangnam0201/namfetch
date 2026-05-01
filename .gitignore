@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
-/devfetch.spec
+/namfetch.spec
 build/
 dist/
 out/
@@ -12,12 +12,16 @@ pkg-root/
 pkg/
 dmg-root/
 appimagetool
+ios-src/
+namfetch-ios/
+Payload/
 android/.buildozer/
 android/bin/
-android/devfetch.py
+android/namfetch.py
 .venv/
 venv/
 .DS_Store
 Thumbs.db
 .claude/
+
 
