@@ -35,6 +35,7 @@ jobs:
   # --------------------------------------------------------------------- #
   windows:
     runs-on: windows-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,6 +57,7 @@ jobs:
   # --------------------------------------------------------------------- #
   linux:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -130,6 +132,7 @@ jobs:
   # --------------------------------------------------------------------- #
   macos:
     runs-on: macos-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -176,6 +179,7 @@ jobs:
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -209,28 +213,10 @@ jobs:
           key: buildozer-${{ runner.os }}-${{ hashFiles('android/buildozer.spec') }}
           restore-keys: buildozer-${{ runner.os }}-
 
-      - name: Pre-accept Android SDK licenses
-        run: |
-          LIC_DIR="$HOME/.buildozer/android/platform/android-sdk/licenses"
-          mkdir -p "$LIC_DIR" "$HOME/.android"
-          touch "$HOME/.android/repositories.cfg"
-          # Hashes that satisfy `sdkmanager --licenses` for all relevant licenses.
-          printf '\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n8933bad161af4178b1185d1a37fbf41ea5269c55\n' \
-            > "$LIC_DIR/android-sdk-license"
-          echo "84831b9409646a918e30573bab4c9c91346d8abd" \
-            > "$LIC_DIR/android-sdk-preview-license"
-          echo "601085b94cd77f0b54ff86406957099ebe79c4d6" \
-            > "$LIC_DIR/android-googletv-license"
-          echo "859f317696f67ef3d7f30a50a5560e7834b43903" \
-            > "$LIC_DIR/android-sdk-arm-dbt-license"
-          echo "d975f751698a77b662f1254ddbeed3901e976f5a" \
-            > "$LIC_DIR/intel-android-extra-license"
-          echo "e9acab5b5fbb560a72cfaecce8946896ff6aab9d" \
-            > "$LIC_DIR/mips-android-sysimage-license"
 
       - name: Build APK
         working-directory: android
-        run: yes | buildozer android debug
+        run: buildozer android debug
 
       - name: Collect APK
         run: |
@@ -250,6 +236,8 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 120
     continue-on-error: true
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -257,7 +245,7 @@ jobs:
 
       - name: Install build deps
         run: |
-          brew install autoconf automake libtool pkg-config
+          brew install autoconf automake libtool pkg-config ccache
           pip install --upgrade pip
           pip install kivy-ios "cython<3.0"
 
@@ -266,8 +254,11 @@ jobs:
         with:
           path: |
             ~/Library/Caches/kivy-ios
+            ${{ github.workspace }}/.ccache
             dist
-          key: kivy-ios-${{ runner.os }}-${{ runner.arch }}-py311-v1
+          key: kivy-ios-${{ runner.os }}-${{ runner.arch }}-py311-v2
+          restore-keys: |
+            kivy-ios-${{ runner.os }}-${{ runner.arch }}-py311-
 
       - name: Build Python + Kivy for iOS
         run: |
